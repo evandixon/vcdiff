@@ -1,4 +1,5 @@
-﻿using VCDiff.Includes;
+﻿using System.IO;
+using VCDiff.Includes;
 using VCDiff.Shared;
 
 namespace VCDiff.Compressors
@@ -9,8 +10,10 @@ namespace VCDiff.Compressors
     /// <remarks>
     /// Implementations are stateful, and a single instance must be used for the entire file for a single operation (compression or decompression).
     /// </remarks>
-    internal interface ICompressor
+    public interface ICompressor
     {
+        byte CompressorId { get; }
         PinnedArrayRental Decompress(WindowSectionType windowSectionType, PinnedArrayRental sectionData);
+        MemoryStream? Compress(WindowSectionType windowSectionType, MemoryStream uncompressedStream);
     }
 }

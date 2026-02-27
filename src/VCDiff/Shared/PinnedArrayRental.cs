@@ -7,7 +7,7 @@ using System.Text;
 
 namespace VCDiff.Shared
 {
-    internal struct PinnedArrayRental : IDisposable
+    public struct PinnedArrayRental : IDisposable
     {
         /// <summary>
         /// The data encapsulated by this rental.

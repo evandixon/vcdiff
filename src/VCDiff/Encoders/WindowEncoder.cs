@@ -1,6 +1,7 @@
 ﻿using System;
 using System.IO;
 using System.Runtime.CompilerServices;
+using VCDiff.Compressors;
 using VCDiff.Includes;
 using VCDiff.Shared;
 
@@ -18,6 +19,7 @@ namespace VCDiff.Encoders
         private MemoryStream instructionAndSizes;
         private MemoryStream dataForAddAndRun;
         private MemoryStream addressForCopy;
+        private ICompressor? secondaryCompressor;
 
         public ChecksumFormat ChecksumFormat { get; }
 
@@ -28,12 +30,13 @@ namespace VCDiff.Encoders
         //This is a window encoder for the VCDIFF format
         //if you are not including a checksum simply pass 0 to checksum
         //it will be ignored
-        public WindowEncoder(long dictionarySize, uint checksum, ChecksumFormat checksumFormat, bool interleaved)
+        public WindowEncoder(long dictionarySize, uint checksum, ChecksumFormat checksumFormat, bool interleaved, ICompressor? secondaryCompressor)
         {
             this.Checksum = checksum;
             this.ChecksumFormat = checksumFormat;
             this.IsInterleaved = interleaved;
             this.dictionarySize = dictionarySize;
+            this.secondaryCompressor = secondaryCompressor;
 
             // The encoder currently doesn't support encoding with a custom table
             // will be added in later since it will be easy as decoding is already implemented
@@ -182,8 +185,6 @@ namespace VCDiff.Encoders
 
         public void Output(Stream outputStream)
         {
-            int lengthOfDelta = CalculateLengthOfTheDeltaEncoding();
-
             //Google's Checksum Implementation Support
             if (this.ChecksumFormat != ChecksumFormat.None)
             {
@@ -196,12 +197,40 @@ namespace VCDiff.Encoders
             VarIntBE.AppendInt32((int)dictionarySize, outputStream); //dictionary size
             VarIntBE.AppendInt32(0, outputStream); //dictionary start position 0 is default aka encompass the whole dictionary
 
+            int lengthOfDelta = CalculateLengthOfTheDeltaEncoding();
             VarIntBE.AppendInt32(lengthOfDelta, outputStream); //length of delta
 
             //begin of delta encoding
             long sizeBeforeDelta = outputStream.Position;
             VarIntBE.AppendInt32((int)targetLength, outputStream); //final target length after decoding
-            outputStream.WriteByte(0x00); // uncompressed
+
+            byte deltaIndicator = 0;
+
+            if (secondaryCompressor != null)
+            {
+                var compressedAddRun = secondaryCompressor.Compress(WindowSectionType.AddRunData, dataForAddAndRun);
+                if (compressedAddRun != null)
+                {
+                    dataForAddAndRun = compressedAddRun;
+                    deltaIndicator |= (byte)VCDiffCompressFlags.VCDDATACOMP;
+                }
+
+                var compressedInstructions = secondaryCompressor.Compress(WindowSectionType.InstructionsAndSizes, instructionAndSizes);
+                if (compressedInstructions != null)
+                {
+                    instructionAndSizes = compressedInstructions;
+                    deltaIndicator |= (byte)VCDiffCompressFlags.VCDINSTCOMP;
+                }
+
+                var compressedAddressForCopy = secondaryCompressor.Compress(WindowSectionType.AddressForCopy, addressForCopy);
+                if (compressedAddressForCopy != null)
+                {
+                    addressForCopy = compressedAddressForCopy;
+                    deltaIndicator |= (byte)VCDiffCompressFlags.VCDADDRCOMP;
+                }
+            }
+
+            outputStream.WriteByte(deltaIndicator);
 
             // [Here is where a secondary compressor would be used
             //  if the encoder and decoder supported that feature.]

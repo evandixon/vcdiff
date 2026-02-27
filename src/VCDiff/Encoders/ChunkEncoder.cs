@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using VCDiff.Compressors;
 using VCDiff.Shared;
 
 #if NET5_0 || NET5_0_OR_GREATER
@@ -18,6 +19,7 @@ namespace VCDiff.Encoders
         private RollingHash hasher;
         private bool interleaved;
         private ChecksumFormat checksumFormat;
+        private readonly ICompressor? secondaryCompressor;
 
         /// <summary>
         /// Performs the actual encoding of a chunk of data into the VCDiff format
@@ -29,8 +31,9 @@ namespace VCDiff.Encoders
         /// <param name="checksumFormat">The format of the checksums for each window.</param>
         /// <param name="minBlockSize">The minimum block size to use. Defaults to 32, and must be a power of 2.
         ///     This value must also be smaller than the block size of the dictionary.</param>
+        /// <param name="secondaryCompressor">The secondary compressor to use to compress window sections, or null if compression should be skipped</param>
         public ChunkEncoder(BlockHash dictionary, ByteBuffer oldData, 
-            RollingHash hash, ChecksumFormat checksumFormat, bool interleaved = false, int minBlockSize = 32)
+            RollingHash hash, ChecksumFormat checksumFormat, bool interleaved = false, int minBlockSize = 32, ICompressor? secondaryCompressor = null)
         {
             this.checksumFormat = checksumFormat;
             this.hasher = hash;
@@ -38,6 +41,7 @@ namespace VCDiff.Encoders
             this.dictionary = dictionary;
             this.minBlockSize = minBlockSize;
             this.interleaved = interleaved;
+            this.secondaryCompressor = secondaryCompressor;
         }
 
         ~ChunkEncoder()
@@ -63,7 +67,7 @@ namespace VCDiff.Encoders
                 _ => 0
             };
 
-            windowEncoder = new WindowEncoder(oldData.Length, checksum, this.checksumFormat, this.interleaved);
+            windowEncoder = new WindowEncoder(oldData.Length, checksum, this.checksumFormat, this.interleaved, this.secondaryCompressor);
 
             oldData.Position = 0;
             newData.Position = 0;

@@ -2,6 +2,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using VCDiff.Compressors;
 using VCDiff.Includes;
 using VCDiff.Shared;
 
@@ -19,13 +20,13 @@ namespace VCDiff.Encoders
         private RollingHash hasher;
         private int bufferSize;
 
-        private static readonly byte[] MagicBytes = { 0xD6, 0xC3, 0xC4, 0x00, 0x00 };
-        private static readonly byte[] MagicBytesExtended = { 0xD6, 0xC3, 0xC4, (byte)'S', 0x00 };
+        private static readonly byte[] MagicBytes = { 0xD6, 0xC3, 0xC4 };
         private int blockSize;
         private int chunkSize;
         private bool disposeRollingHash = false;
 
         private NativeAllocation<byte> _nativeAllocation;
+        private ICompressor? secondaryCompressor;
 
         /// <summary>
         /// Creates a new VCDIFF Encoder. The input streams will not be closed once this object is disposed.
@@ -50,9 +51,11 @@ namespace VCDiff.Encoders
         ///
         /// If you provide a <see cref="RollingHash"/> instance, you must dispose of it yourself.
         /// </param>
+        /// <param name="secondaryCompressor">The compressor to use to compress window sections, or null if compression should be skipped</param>
         /// <exception cref="ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
-        public unsafe VcEncoder(Stream source, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null)
+        public unsafe VcEncoder(Stream source, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null, ICompressor? secondaryCompressor = null)
         {
+            this.secondaryCompressor = secondaryCompressor;
             _nativeAllocation = new NativeAllocation<byte>((int)source.Length);
             source.Read(_nativeAllocation.AsSpan());
             this.oldData = new ByteBuffer(_nativeAllocation.AsSpan());
@@ -83,9 +86,11 @@ namespace VCDiff.Encoders
         ///
         /// If you provide a <see cref="RollingHash"/> instance, you must dispose of it yourself.
         /// </param>
+        /// <param name="secondaryCompressor">The compressor to use to compress window sections, or null if compression should be skipped</param>
         /// <exception cref="ArgumentException">If an invalid blockSize or chunkSize is used..</exception>
-        public unsafe VcEncoder(ByteBuffer buffer, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null)
+        public unsafe VcEncoder(ByteBuffer buffer, Stream target, Stream outputStream, int maxBufferSize = 1, int blockSize = 16, int chunkSize = 0, RollingHash? rollingHash = null, ICompressor? secondaryCompressor = null)
         {
+            this.secondaryCompressor = secondaryCompressor;
             this.oldData = buffer;
             InitializeEncoder(target, outputStream, maxBufferSize, blockSize, chunkSize, rollingHash);
         }
@@ -216,12 +221,29 @@ namespace VCDiff.Encoders
             oldData.Position = 0;
             targetData.Position = 0;
 
-            // file header
-            // write magic bytes
+            // Header1, Header2, Header3
+            await writeBytes(MagicBytes);
+
+            // Header4
             if (!interleaved && checksumFormat != ChecksumFormat.SDCH)
-                await writeBytes(MagicBytes);
+            {
+                await writeBytes([0]);
+            }
             else
-                await writeBytes(MagicBytesExtended);
+            {
+                await writeBytes([(byte)'S']);
+            }
+
+            byte hdrIndictator = 0;
+            if (secondaryCompressor != null)
+            {
+                hdrIndictator |= (byte)VCDiffCodeFlags.VCDDECOMPRESS;
+                await writeBytes([hdrIndictator, secondaryCompressor.CompressorId]);
+            }
+            else
+            {
+                await writeBytes([hdrIndictator]);
+            }
 
             return true;
         }
@@ -238,7 +260,7 @@ namespace VCDiff.Encoders
             dictionary.AddAllBlocks();
             oldData!.Position = 0;
 
-            chunkEncoder = new ChunkEncoder(dictionary, oldData, hasher, checksumFormat, interleaved, chunkSize);
+            chunkEncoder = new ChunkEncoder(dictionary, oldData, hasher, checksumFormat, interleaved, chunkSize, secondaryCompressor);
             buf = new Memory<byte>(new byte[bufferSize]);
         }
 

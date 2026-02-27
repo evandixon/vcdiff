@@ -3,6 +3,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using VCDiff.Compressors;
 using VCDiff.Decoders;
 using VCDiff.Encoders;
 using VCDiff.Includes;
@@ -530,6 +531,47 @@ namespace VCDiff.Tests
 
             using VcDecoder decoder1 = new VcDecoder(srcStream, deltaStream, outputStream, 2); 
             Assert.Throws<InvalidOperationException>(() => decoder1.Decode(out bytesWritten));
+        }
+
+        [Fact]
+        public void XzCompression_Test()
+        {
+            // Get baseline for uncompressed delta
+            using var srcStream = File.OpenRead($"patches{Path.DirectorySeparatorChar}a.test");
+            using var targetStream = File.OpenRead($"patches{Path.DirectorySeparatorChar}b.test");
+            using var deltaStream = new MemoryStream();
+            using var uncompressedCoder = new VcEncoder(srcStream, targetStream, deltaStream);
+            VCDiffResult uncompressedResult = uncompressedCoder.Encode();
+            Assert.Equal(VCDiffResult.SUCCESS, uncompressedResult);
+
+            var uncompressedSize = deltaStream.Length;
+
+            // Compress
+            srcStream.Position = 0;
+            targetStream.Position = 0;
+            deltaStream.Position = 0;
+            deltaStream.SetLength(0);
+            using var outputStream = new MemoryStream();
+            using var compressor = new XzCompressor();
+            using var compressedCoder = new VcEncoder(srcStream, targetStream, deltaStream, secondaryCompressor: compressor);
+
+            VCDiffResult compressedResult = compressedCoder.Encode();
+            Assert.Equal(VCDiffResult.SUCCESS, compressedResult);
+            Assert.Equal(323666, deltaStream.Length);
+
+            var header = new byte[6];
+            deltaStream.Position = 0;
+            deltaStream.Read(header, 0, 6);
+            Assert.True(header.SequenceEqual(new byte[] { 0xD6, 0xC3, 0xC4, 0x00, 0x01 /* VCDDECOMPRESS */, 0x02 /* XzCompressor's ID */}));
+
+            // Decompress
+            srcStream.Position = 0;
+            targetStream.Position = 0;
+            deltaStream.Position = 0;
+
+            using VcDecoder decoder = new VcDecoder(srcStream, deltaStream, outputStream);
+            Assert.Equal(VCDiffResult.SUCCESS, decoder.Decode(out long bytesWritten));
+            Assert.NotEqual(0, bytesWritten);
         }
     }
 }
